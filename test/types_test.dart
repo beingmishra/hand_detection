@@ -310,6 +310,162 @@ void main() {
         expect(restored.type, type);
       }
     });
+
+    test('negative z value is valid and preserved', () {
+      final landmark = HandLandmark(
+        type: HandLandmarkType.wrist,
+        x: 100.0,
+        y: 100.0,
+        z: -0.75,
+        visibility: 0.9,
+      );
+      expect(landmark.z, -0.75);
+      final restored = HandLandmark.fromMap(landmark.toMap());
+      expect(restored.z, -0.75);
+    });
+
+    test('z value greater than 1.0 is valid and preserved', () {
+      final landmark = HandLandmark(
+        type: HandLandmarkType.thumbTip,
+        x: 100.0,
+        y: 100.0,
+        z: 2.5,
+        visibility: 0.8,
+      );
+      expect(landmark.z, 2.5);
+      final restored = HandLandmark.fromMap(landmark.toMap());
+      expect(restored.z, 2.5);
+    });
+
+    test('visibility exactly 0.0 is preserved', () {
+      final landmark = HandLandmark(
+        type: HandLandmarkType.pinkyTip,
+        x: 10.0,
+        y: 10.0,
+        z: 0.0,
+        visibility: 0.0,
+      );
+      expect(landmark.visibility, 0.0);
+      final restored = HandLandmark.fromMap(landmark.toMap());
+      expect(restored.visibility, 0.0);
+    });
+
+    test('visibility exactly 1.0 is preserved', () {
+      final landmark = HandLandmark(
+        type: HandLandmarkType.indexFingerTip,
+        x: 10.0,
+        y: 10.0,
+        z: 0.0,
+        visibility: 1.0,
+      );
+      expect(landmark.visibility, 1.0);
+      final restored = HandLandmark.fromMap(landmark.toMap());
+      expect(restored.visibility, 1.0);
+    });
+
+    test('very large coordinate values are preserved', () {
+      final landmark = HandLandmark(
+        type: HandLandmarkType.wrist,
+        x: 10000.0,
+        y: 10000.0,
+        z: 0.0,
+        visibility: 0.9,
+      );
+      expect(landmark.x, 10000.0);
+      expect(landmark.y, 10000.0);
+      final restored = HandLandmark.fromMap(landmark.toMap());
+      expect(restored.x, 10000.0);
+      expect(restored.y, 10000.0);
+    });
+
+    test('xNorm with imageWidth = 1 clamps out-of-range x', () {
+      final inRange = HandLandmark(
+        type: HandLandmarkType.wrist,
+        x: 0.5,
+        y: 0.5,
+        z: 0.0,
+        visibility: 1.0,
+      );
+      expect(inRange.xNorm(1), closeTo(0.5, 0.0001));
+
+      final over = HandLandmark(
+        type: HandLandmarkType.wrist,
+        x: 2.0,
+        y: 0.0,
+        z: 0.0,
+        visibility: 1.0,
+      );
+      expect(over.xNorm(1), 1.0);
+
+      final under = HandLandmark(
+        type: HandLandmarkType.wrist,
+        x: -1.0,
+        y: 0.0,
+        z: 0.0,
+        visibility: 1.0,
+      );
+      expect(under.xNorm(1), 0.0);
+    });
+
+    test('yNorm with imageHeight = 1 clamps out-of-range y', () {
+      final inRange = HandLandmark(
+        type: HandLandmarkType.wrist,
+        x: 0.0,
+        y: 0.5,
+        z: 0.0,
+        visibility: 1.0,
+      );
+      expect(inRange.yNorm(1), closeTo(0.5, 0.0001));
+
+      final over = HandLandmark(
+        type: HandLandmarkType.wrist,
+        x: 0.0,
+        y: 2.0,
+        z: 0.0,
+        visibility: 1.0,
+      );
+      expect(over.yNorm(1), 1.0);
+
+      final under = HandLandmark(
+        type: HandLandmarkType.wrist,
+        x: 0.0,
+        y: -1.0,
+        z: 0.0,
+        visibility: 1.0,
+      );
+      expect(under.yNorm(1), 0.0);
+    });
+
+    test('toPixel with negative x and y truncates toward zero', () {
+      final landmark = HandLandmark(
+        type: HandLandmarkType.wrist,
+        x: -10.9,
+        y: -5.3,
+        z: 0.0,
+        visibility: 1.0,
+      );
+      final point = landmark.toPixel(640, 480);
+      expect(point.x, -10);
+      expect(point.y, -5);
+    });
+
+    test('fromMap ignores extra fields in map', () {
+      final map = {
+        'type': 'wrist',
+        'x': 50.0,
+        'y': 60.0,
+        'z': 0.1,
+        'visibility': 0.95,
+        'extraField': 'should be ignored',
+        'anotherExtra': 42,
+      };
+      final landmark = HandLandmark.fromMap(map);
+      expect(landmark.type, HandLandmarkType.wrist);
+      expect(landmark.x, 50.0);
+      expect(landmark.y, 60.0);
+      expect(landmark.z, 0.1);
+      expect(landmark.visibility, 0.95);
+    });
   });
 
   group('BoundingBox', () {
@@ -342,6 +498,37 @@ void main() {
 
       expect(bbox.left, 0.0);
       expect(bbox.right, 100.0);
+    });
+
+    test('negative coordinates are stored as-is', () {
+      const bbox =
+          BoundingBox(left: -50.0, top: -30.0, right: -10.0, bottom: -5.0);
+      expect(bbox.left, -50.0);
+      expect(bbox.top, -30.0);
+      expect(bbox.right, -10.0);
+      expect(bbox.bottom, -5.0);
+    });
+
+    test('negative coordinates round-trip via toMap/fromMap', () {
+      const original =
+          BoundingBox(left: -100.0, top: -80.0, right: -20.0, bottom: -10.0);
+      final restored = BoundingBox.fromMap(original.toMap());
+      expect(restored.left, -100.0);
+      expect(restored.top, -80.0);
+      expect(restored.right, -20.0);
+      expect(restored.bottom, -10.0);
+    });
+
+    test('zero-size box (left == right and top == bottom) is preserved', () {
+      const bbox =
+          BoundingBox(left: 50.0, top: 50.0, right: 50.0, bottom: 50.0);
+      expect(bbox.left, 50.0);
+      expect(bbox.top, 50.0);
+      expect(bbox.right, 50.0);
+      expect(bbox.bottom, 50.0);
+      final restored = BoundingBox.fromMap(bbox.toMap());
+      expect(restored.left, restored.right);
+      expect(restored.top, restored.bottom);
     });
   });
 
@@ -582,6 +769,40 @@ void main() {
       expect(str, contains('Hand('));
       expect(str, contains('score='));
       expect(str, contains('landmarks=2'));
+    });
+
+    test('toString with rotation data present includes score and landmarks',
+        () {
+      // createFullHand already has rotation, rotatedCenterX/Y, rotatedSize set.
+      // Verify toString still produces well-formed output with those fields present.
+      final hand = createFullHand();
+      expect(hand.rotation, isNotNull);
+      expect(hand.rotatedCenterX, isNotNull);
+      expect(hand.rotatedCenterY, isNotNull);
+      expect(hand.rotatedSize, isNotNull);
+      final str = hand.toString();
+      expect(str, contains('Hand('));
+      expect(str, contains('score=0.950'));
+      expect(str, contains('landmarks=2'));
+      expect(str, contains('gesture=thumbUp'));
+    });
+
+    test('toString with null rotation does not throw', () {
+      const hand = Hand(
+        boundingBox: BoundingBox(left: 0, top: 0, right: 100, bottom: 100),
+        score: 0.5,
+        landmarks: [],
+        imageWidth: 640,
+        imageHeight: 480,
+      );
+      expect(hand.rotation, isNull);
+      expect(hand.rotatedCenterX, isNull);
+      expect(hand.rotatedCenterY, isNull);
+      expect(hand.rotatedSize, isNull);
+      final str = hand.toString();
+      expect(str, contains('Hand('));
+      expect(str, contains('score=0.500'));
+      expect(str, contains('landmarks=0'));
     });
   });
 

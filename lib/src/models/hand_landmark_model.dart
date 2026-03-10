@@ -127,6 +127,7 @@ class HandLandmarkModelRunner {
     _isInitialized = true;
   }
 
+  /// Returns the asset path for the given [HandLandmarkModel] variant.
   String _getModelPath(HandLandmarkModel model) {
     return 'packages/hand_detection/assets/models/hand_landmark_full.tflite';
   }
@@ -235,7 +236,7 @@ class HandLandmarkModelRunner {
     required int cropHeight,
   }) {
     final rawScore = scoreData[0][0];
-    final score = 1.0 / (1.0 + math.exp(-rawScore));
+    final score = sigmoid(rawScore);
 
     final rawHandedness = handednessData[0][0];
     final handedness = rawHandedness > 0.5 ? Handedness.right : Handedness.left;

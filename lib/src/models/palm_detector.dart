@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:meta/meta.dart';
 import 'package:flutter_litert/flutter_litert.dart';
+import 'package:flutter_litert/flutter_litert.dart' as litert
+    show normalizeRadians, sigmoid;
 import '../util/image_utils.dart';
 
 /// A detected palm with rotation rectangle parameters.
@@ -94,9 +96,8 @@ class PalmDetector {
   PalmDetector({this.scoreThreshold = 0.45});
 
   /// Normalizes angle to range [-pi, pi].
-  static double normalizeRadians(double angle) {
-    return angle - 2 * math.pi * ((angle + math.pi) / (2 * math.pi)).floor();
-  }
+  static double normalizeRadians(double angle) =>
+      litert.normalizeRadians(angle);
 
   /// Initializes the palm detector by loading the TFLite model.
   Future<void> initialize({PerformanceConfig? performanceConfig}) async {
@@ -302,7 +303,7 @@ class PalmDetector {
 
     for (int i = 0; i < rawBoxes.length; i++) {
       final rawScore = rawScores[i][0];
-      final score = 1.0 / (1.0 + math.exp(-rawScore));
+      final score = litert.sigmoid(rawScore);
 
       if (score <= scoreThreshold) continue;
 

@@ -8,7 +8,10 @@ import 'package:opencv_dart/opencv_dart.dart' as cv;
 import '../hand_detector.dart';
 import '../types.dart';
 
-/// Data passed to the detection isolate during startup.
+/// Startup payload transferred to the background isolate via [Isolate.spawn].
+///
+/// Carries model bytes (as [TransferableTypedData] for zero-copy transfer)
+/// and all configuration needed to reconstruct a [HandDetector] inside the isolate.
 class _IsolateStartupData {
   final SendPort sendPort;
   final TransferableTypedData palmDetectionBytes;
@@ -139,6 +142,7 @@ class HandDetectorIsolate {
     return instance;
   }
 
+  /// Loads model assets and spawns the background isolate with an initialized [HandDetector].
   Future<void> _initialize({
     required HandMode mode,
     required HandLandmarkModel landmarkModel,
@@ -262,6 +266,7 @@ class HandDetectorIsolate {
     );
   }
 
+  /// Routes a response message from the isolate to the correct pending [Completer].
   void _handleResponse(dynamic message) {
     if (message is! Map) return;
 
@@ -278,6 +283,10 @@ class HandDetectorIsolate {
     }
   }
 
+  /// Sends a request to the isolate and returns the typed response.
+  ///
+  /// Assigns a unique [id] to each request so [_handleResponse] can match
+  /// responses to their corresponding [Completer].
   Future<T> _sendRequest<T>(
     String operation,
     Map<String, dynamic> params,
@@ -417,7 +426,9 @@ class HandDetectorIsolate {
     _initialized = false;
   }
 
-  /// Isolate entry point - handles hand detection.
+  /// Isolate entry point: initializes the [HandDetector] and listens for detection requests.
+  ///
+  /// Sends its [SendPort] back to the main isolate on success, or an error map on failure.
   @pragma('vm:entry-point')
   static void _isolateEntry(_IsolateStartupData data) async {
     final SendPort mainSendPort = data.sendPort;

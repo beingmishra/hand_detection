@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
+import 'package:flutter_litert/flutter_litert.dart';
 import '../models/palm_detector.dart';
 
 /// Utility functions for image preprocessing and transformations using OpenCV.
@@ -18,35 +19,25 @@ class ImageUtils {
     int resizeWidth,
     int resizeHeight,
   ) {
-    final imageHeight = image.rows;
-    final imageWidth = image.cols;
+    final params = computeAspectPadParams(
+      srcWidth: image.cols,
+      srcHeight: image.rows,
+      targetWidth: resizeWidth,
+      targetHeight: resizeHeight,
+    );
 
-    final ash = resizeHeight / imageHeight;
-    final asw = resizeWidth / imageWidth;
-
-    int newWidth, newHeight;
-    if (asw < ash) {
-      newWidth = (imageWidth * asw).toInt();
-      newHeight = (imageHeight * asw).toInt();
-    } else {
-      newWidth = (imageWidth * ash).toInt();
-      newHeight = (imageHeight * ash).toInt();
-    }
-
-    final resizedImage =
-        cv.resize(image, (newWidth, newHeight), interpolation: cv.INTER_LINEAR);
-
-    final padTop = (resizeHeight - newHeight) ~/ 2;
-    final padBottom = resizeHeight - newHeight - padTop;
-    final padLeft = (resizeWidth - newWidth) ~/ 2;
-    final padRight = resizeWidth - newWidth - padLeft;
+    final resizedImage = cv.resize(
+      image,
+      (params.newWidth, params.newHeight),
+      interpolation: cv.INTER_LINEAR,
+    );
 
     final paddedImage = cv.copyMakeBorder(
       resizedImage,
-      padTop,
-      padBottom,
-      padLeft,
-      padRight,
+      params.padTop,
+      params.padBottom,
+      params.padLeft,
+      params.padRight,
       cv.BORDER_CONSTANT,
       value: cv.Scalar.black,
     );
@@ -141,25 +132,25 @@ class ImageUtils {
     List<double> ratioOut,
     List<int> dwdhOut,
   ) {
-    final int w = src.cols;
-    final int h = src.rows;
-    final double r = math.min(th / h, tw / w);
-    final int nw = (w * r).round();
-    final int nh = (h * r).round();
-    final int dw = (tw - nw) ~/ 2;
-    final int dh = (th - nh) ~/ 2;
+    final params = computeLetterboxParams(
+      srcWidth: src.cols,
+      srcHeight: src.rows,
+      targetWidth: tw,
+      targetHeight: th,
+    );
 
-    final resized = cv.resize(src, (nw, nh), interpolation: cv.INTER_LINEAR);
-
-    final dwRight = tw - nw - dw;
-    final dhBottom = th - nh - dh;
+    final resized = cv.resize(
+      src,
+      (params.newWidth, params.newHeight),
+      interpolation: cv.INTER_LINEAR,
+    );
 
     final canvas = cv.copyMakeBorder(
       resized,
-      dh,
-      dhBottom,
-      dw,
-      dwRight,
+      params.padTop,
+      params.padBottom,
+      params.padLeft,
+      params.padRight,
       cv.BORDER_CONSTANT,
       value: cv.Scalar(114, 114, 114, 0),
     );
@@ -167,10 +158,10 @@ class ImageUtils {
 
     ratioOut
       ..clear()
-      ..add(r);
+      ..add(params.scale);
     dwdhOut
       ..clear()
-      ..addAll([dw, dh]);
+      ..addAll([params.padLeft, params.padTop]);
     return canvas;
   }
 
@@ -209,18 +200,11 @@ class ImageUtils {
   ///
   /// Returns a flat Float32List with normalized RGB pixel values.
   static Float32List matToFloat32Tensor(cv.Mat mat, {Float32List? buffer}) {
-    final data = mat.data;
-    final totalPixels = mat.rows * mat.cols;
-    final size = totalPixels * 3;
-    final tensor = buffer ?? Float32List(size);
-    const scale = 1.0 / 255.0;
-
-    for (int i = 0, j = 0; i < totalPixels * 3 && j < size; i += 3, j += 3) {
-      tensor[j] = data[i + 2] * scale;
-      tensor[j + 1] = data[i + 1] * scale;
-      tensor[j + 2] = data[i] * scale;
-    }
-    return tensor;
+    return bgrBytesToRgbFloat32(
+      bytes: mat.data,
+      totalPixels: mat.rows * mat.cols,
+      buffer: buffer,
+    );
   }
 
   /// Converts an image to a 4D tensor in NHWC format for TensorFlow Lite.
@@ -242,35 +226,9 @@ class ImageUtils {
     int height, {
     List<List<List<List<double>>>>? reuse,
   }) {
-    final List<List<List<List<double>>>> out = reuse ??
-        List.generate(
-          1,
-          (_) => List.generate(
-            height,
-            (_) => List.generate(
-              width,
-              (_) => List<double>.filled(3, 0.0),
-              growable: false,
-            ),
-            growable: false,
-          ),
-          growable: false,
-        );
-
-    final bytes = mat.data;
-    const double scale = 1.0 / 255.0;
-    int byteIndex = 0;
-
-    for (int y = 0; y < height; y++) {
-      final List<List<double>> row = out[0][y];
-      for (int x = 0; x < width; x++) {
-        final List<double> pixel = row[x];
-        pixel[0] = bytes[byteIndex + 2] * scale;
-        pixel[1] = bytes[byteIndex + 1] * scale;
-        pixel[2] = bytes[byteIndex] * scale;
-        byteIndex += 3;
-      }
-    }
+    final out = reuse ?? createNHWCTensor4D(height, width);
+    fillNHWC4DFromBgrBytes(
+        bytes: mat.data, tensor: out, width: width, height: height);
     return out;
   }
 }
