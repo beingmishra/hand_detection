@@ -139,19 +139,15 @@ class HandDetector {
   /// Must be called before [detect] or [detectOnMat].
   /// If already initialized, will dispose existing models and reinitialize.
   Future<void> initialize() async {
-    if (_isInitialized) {
-      await dispose();
-    }
+    if (_isInitialized) await dispose();
 
-    await _palm.initialize(performanceConfig: performanceConfig);
-    await _lm.initialize(landmarkModel, performanceConfig: performanceConfig);
-
-    if (_gestureRecognizer != null) {
-      await _gestureRecognizer!
-          .initialize(performanceConfig: performanceConfig);
-    }
-
-    _isInitialized = true;
+    await _initializeWith(
+      palmLoader: () => _palm.initialize(performanceConfig: performanceConfig),
+      landmarkLoader: () =>
+          _lm.initialize(performanceConfig: performanceConfig),
+      gestureLoader: (_) =>
+          _gestureRecognizer!.initialize(performanceConfig: performanceConfig),
+    );
   }
 
   /// Initializes the hand detector from pre-loaded model bytes.
@@ -170,27 +166,38 @@ class HandDetector {
     Uint8List? gestureEmbedderBytes,
     Uint8List? gestureClassifierBytes,
   }) async {
-    if (_isInitialized) {
-      await dispose();
-    }
+    if (_isInitialized) await dispose();
 
-    await _palm.initializeFromBuffer(
-      palmDetectionBytes,
-      performanceConfig: performanceConfig,
-    );
-    await _lm.initializeFromBuffer(
-      handLandmarkBytes,
-      performanceConfig: performanceConfig,
-    );
-
-    if (_gestureRecognizer != null &&
-        gestureEmbedderBytes != null &&
-        gestureClassifierBytes != null) {
-      await _gestureRecognizer!.initializeFromBuffers(
-        embedderBytes: gestureEmbedderBytes,
-        classifierBytes: gestureClassifierBytes,
+    await _initializeWith(
+      palmLoader: () => _palm.initializeFromBuffer(
+        palmDetectionBytes,
         performanceConfig: performanceConfig,
-      );
+      ),
+      landmarkLoader: () => _lm.initializeFromBuffer(
+        handLandmarkBytes,
+        performanceConfig: performanceConfig,
+      ),
+      gestureLoader:
+          gestureEmbedderBytes != null && gestureClassifierBytes != null
+              ? (_) => _gestureRecognizer!.initializeFromBuffers(
+                    embedderBytes: gestureEmbedderBytes,
+                    classifierBytes: gestureClassifierBytes,
+                    performanceConfig: performanceConfig,
+                  )
+              : null,
+    );
+  }
+
+  Future<void> _initializeWith({
+    required Future<void> Function() palmLoader,
+    required Future<void> Function() landmarkLoader,
+    Future<void> Function(GestureRecognizer)? gestureLoader,
+  }) async {
+    await palmLoader();
+    await landmarkLoader();
+
+    if (_gestureRecognizer != null && gestureLoader != null) {
+      await gestureLoader(_gestureRecognizer!);
     }
 
     _isInitialized = true;
@@ -234,6 +241,8 @@ class HandDetector {
         mat.dispose();
       }
     } catch (e) {
+      // Intentionally broad: imdecode can throw on malformed bytes; treat any
+      // decode/pipeline failure as "no hands detected" for production robustness.
       return <Hand>[];
     }
   }
@@ -279,7 +288,7 @@ class HandDetector {
         palms.length > maxDetections ? palms.sublist(0, maxDetections) : palms;
 
     if (mode == HandMode.boxes) {
-      return _palmsToHands(image, limitedPalms, []);
+      return _palmsToHands(image, limitedPalms);
     }
 
     final cropDataList = <_HandCropData>[];
@@ -289,9 +298,7 @@ class HandDetector {
         continue;
       }
 
-      final centerX = palm.sqnRrCenterX * image.cols;
-      final centerY = palm.sqnRrCenterY * image.rows;
-      final size = palm.sqnRrSize * math.max(image.cols, image.rows);
+      final (:centerX, :centerY, :size) = _palmCoordinates(palm, image);
 
       cropDataList.add(_HandCropData(
         palm: palm,
@@ -326,30 +333,21 @@ class HandDetector {
   List<Hand> _palmsToHands(
     cv.Mat image,
     List<PalmDetection> palms,
-    List<HandLandmarks?> landmarks,
   ) {
     final results = <Hand>[];
 
-    for (int i = 0; i < palms.length; i++) {
-      final palm = palms[i];
-
-      final centerX = palm.sqnRrCenterX * image.cols;
-      final centerY = palm.sqnRrCenterY * image.rows;
-      final size = palm.sqnRrSize * math.max(image.cols, image.rows);
+    for (final palm in palms) {
+      final (:centerX, :centerY, :size) = _palmCoordinates(palm, image);
       final halfSize = size / 2;
 
       results.add(Hand(
-        boundingBox: BoundingBox(
-          left: (centerX - halfSize).clamp(0, image.cols.toDouble()),
-          top: (centerY - halfSize).clamp(0, image.rows.toDouble()),
-          right: (centerX + halfSize).clamp(0, image.cols.toDouble()),
-          bottom: (centerY + halfSize).clamp(0, image.rows.toDouble()),
-        ),
+        boundingBox: _clampedBoundingBox(
+            centerX, centerY, halfSize, image.cols, image.rows),
         score: palm.score,
         landmarks: const [],
         imageWidth: image.cols,
         imageHeight: image.rows,
-        handedness: i < landmarks.length ? landmarks[i]?.handedness : null,
+        handedness: null,
         rotation: palm.rotation,
         rotatedCenterX: centerX,
         rotatedCenterY: centerY,
@@ -427,12 +425,8 @@ class HandDetector {
       final halfSize = data.cropSize / 2;
 
       results.add(Hand(
-        boundingBox: BoundingBox(
-          left: (data.centerX - halfSize).clamp(0, image.cols.toDouble()),
-          top: (data.centerY - halfSize).clamp(0, image.rows.toDouble()),
-          right: (data.centerX + halfSize).clamp(0, image.cols.toDouble()),
-          bottom: (data.centerY + halfSize).clamp(0, image.rows.toDouble()),
-        ),
+        boundingBox: _clampedBoundingBox(
+            data.centerX, data.centerY, halfSize, image.cols, image.rows),
         score: data.palm.score,
         landmarks: transformedLandmarks,
         imageWidth: image.cols,
@@ -479,5 +473,24 @@ class HandDetector {
     final yOrig = yRot + centerY;
 
     return (xOrig, yOrig);
+  }
+
+  ({double centerX, double centerY, double size}) _palmCoordinates(
+    PalmDetection palm,
+    cv.Mat image,
+  ) {
+    final (:cx, :cy, :size) =
+        ImageUtils.palmCoordinates(palm, image.cols, image.rows);
+    return (centerX: cx, centerY: cy, size: size);
+  }
+
+  BoundingBox _clampedBoundingBox(double centerX, double centerY,
+      double halfSize, int imgWidth, int imgHeight) {
+    return BoundingBox.ltrb(
+      (centerX - halfSize).clamp(0, imgWidth.toDouble()),
+      (centerY - halfSize).clamp(0, imgHeight.toDouble()),
+      (centerX + halfSize).clamp(0, imgWidth.toDouble()),
+      (centerY + halfSize).clamp(0, imgHeight.toDouble()),
+    );
   }
 }

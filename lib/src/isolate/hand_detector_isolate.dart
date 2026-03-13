@@ -1,8 +1,8 @@
-import 'dart:async';
 import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
+import 'package:flutter_litert/flutter_litert.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 
 import '../hand_detector.dart';
@@ -79,19 +79,8 @@ class _IsolateStartupData {
 ///
 /// The background isolate holds all TFLite models (~8MB for full pipeline).
 /// Call [dispose] when finished to release these resources.
-class HandDetectorIsolate {
+class HandDetectorIsolate extends IsolateWorkerBase {
   HandDetectorIsolate._();
-
-  Isolate? _isolate;
-  SendPort? _sendPort;
-  final ReceivePort _receivePort = ReceivePort();
-  final Map<int, Completer<dynamic>> _pending = {};
-  int _nextId = 0;
-
-  bool _initialized = false;
-
-  /// Returns true if the isolate is initialized and ready for detection.
-  bool get isReady => _initialized;
 
   /// Spawns a new isolate with an initialized [HandDetector].
   ///
@@ -154,49 +143,48 @@ class HandDetectorIsolate {
     required bool enableGestures,
     required double gestureMinConfidence,
   }) async {
-    if (_initialized) {
+    if (isReady) {
       throw StateError('HandDetectorIsolate already initialized');
     }
 
-    try {
-      const palmPath =
-          'packages/hand_detection/assets/models/hand_detection.tflite';
-      const landmarkPath =
-          'packages/hand_detection/assets/models/hand_landmark_full.tflite';
+    const palmPath =
+        'packages/hand_detection/assets/models/hand_detection.tflite';
+    const landmarkPath =
+        'packages/hand_detection/assets/models/hand_landmark_full.tflite';
 
-      final assetFutures = <Future<ByteData>>[
-        rootBundle.load(palmPath),
-        rootBundle.load(landmarkPath),
-      ];
+    final assetFutures = <Future<ByteData>>[
+      rootBundle.load(palmPath),
+      rootBundle.load(landmarkPath),
+    ];
 
-      if (enableGestures) {
-        const embedderPath =
-            'packages/hand_detection/assets/models/gesture_embedder.tflite';
-        const classifierPath =
-            'packages/hand_detection/assets/models/canned_gesture_classifier.tflite';
-        assetFutures.add(rootBundle.load(embedderPath));
-        assetFutures.add(rootBundle.load(classifierPath));
-      }
+    if (enableGestures) {
+      const embedderPath =
+          'packages/hand_detection/assets/models/gesture_embedder.tflite';
+      const classifierPath =
+          'packages/hand_detection/assets/models/canned_gesture_classifier.tflite';
+      assetFutures.add(rootBundle.load(embedderPath));
+      assetFutures.add(rootBundle.load(classifierPath));
+    }
 
-      final results = await Future.wait(assetFutures);
+    final results = await Future.wait(assetFutures);
 
-      final palmBytes = results[0].buffer.asUint8List();
-      final landmarkBytes = results[1].buffer.asUint8List();
+    final palmBytes = results[0].buffer.asUint8List();
+    final landmarkBytes = results[1].buffer.asUint8List();
 
-      TransferableTypedData? gestureEmbedderData;
-      TransferableTypedData? gestureClassifierData;
-      if (enableGestures && results.length > 2) {
-        final embedderBytes = results[2].buffer.asUint8List();
-        final classifierBytes = results[3].buffer.asUint8List();
-        gestureEmbedderData = TransferableTypedData.fromList([embedderBytes]);
-        gestureClassifierData =
-            TransferableTypedData.fromList([classifierBytes]);
-      }
+    TransferableTypedData? gestureEmbedderData;
+    TransferableTypedData? gestureClassifierData;
+    if (enableGestures && results.length > 2) {
+      final embedderBytes = results[2].buffer.asUint8List();
+      final classifierBytes = results[3].buffer.asUint8List();
+      gestureEmbedderData = TransferableTypedData.fromList([embedderBytes]);
+      gestureClassifierData = TransferableTypedData.fromList([classifierBytes]);
+    }
 
-      _isolate = await Isolate.spawn(
+    await initWorker(
+      (sendPort) => Isolate.spawn(
         _isolateEntry,
         _IsolateStartupData(
-          sendPort: _receivePort.sendPort,
+          sendPort: sendPort,
           palmDetectionBytes: TransferableTypedData.fromList([palmBytes]),
           handLandmarkBytes: TransferableTypedData.fromList([landmarkBytes]),
           gestureEmbedderBytes: gestureEmbedderData,
@@ -213,104 +201,10 @@ class HandDetectorIsolate {
           gestureMinConfidence: gestureMinConfidence,
         ),
         debugName: 'HandDetectorIsolate',
-      );
-
-      _sendPort = await _setupIsolateListener(
-        receivePort: _receivePort,
-        responseHandler: _handleResponse,
-        timeout: const Duration(seconds: 30),
-        timeoutMsg: 'Hand detection isolate initialization timed out',
-      );
-
-      _initialized = true;
-    } catch (e) {
-      _isolate?.kill(priority: Isolate.immediate);
-      _receivePort.close();
-      _initialized = false;
-      rethrow;
-    }
-  }
-
-  /// Sets up init handshake and message routing for the isolate.
-  static Future<SendPort> _setupIsolateListener({
-    required ReceivePort receivePort,
-    required void Function(dynamic) responseHandler,
-    required Duration timeout,
-    required String timeoutMsg,
-  }) async {
-    final Completer<SendPort> initCompleter = Completer<SendPort>();
-    late final StreamSubscription<dynamic> subscription;
-
-    subscription = receivePort.listen((message) {
-      if (!initCompleter.isCompleted) {
-        if (message is SendPort) {
-          initCompleter.complete(message);
-        } else if (message is Map && message['error'] != null) {
-          initCompleter.completeError(StateError(message['error'] as String));
-        } else {
-          initCompleter.completeError(
-            StateError('Expected SendPort, got ${message.runtimeType}'),
-          );
-        }
-        return;
-      }
-      responseHandler(message);
-    });
-
-    return initCompleter.future.timeout(
-      timeout,
-      onTimeout: () {
-        subscription.cancel();
-        throw TimeoutException(timeoutMsg);
-      },
+      ),
+      timeout: const Duration(seconds: 30),
+      timeoutMessage: 'Hand detection isolate initialization timed out',
     );
-  }
-
-  /// Routes a response message from the isolate to the correct pending [Completer].
-  void _handleResponse(dynamic message) {
-    if (message is! Map) return;
-
-    final int? id = message['id'] as int?;
-    if (id == null) return;
-
-    final Completer<dynamic>? completer = _pending.remove(id);
-    if (completer == null) return;
-
-    if (message['error'] != null) {
-      completer.completeError(StateError(message['error'] as String));
-    } else {
-      completer.complete(message['result']);
-    }
-  }
-
-  /// Sends a request to the isolate and returns the typed response.
-  ///
-  /// Assigns a unique [id] to each request so [_handleResponse] can match
-  /// responses to their corresponding [Completer].
-  Future<T> _sendRequest<T>(
-    String operation,
-    Map<String, dynamic> params,
-  ) async {
-    if (!_initialized) {
-      throw StateError(
-        'HandDetectorIsolate not initialized. Use HandDetectorIsolate.spawn().',
-      );
-    }
-    if (_sendPort == null) {
-      throw StateError('Isolate SendPort not available.');
-    }
-
-    final int id = _nextId++;
-    final Completer<T> completer = Completer<T>();
-    _pending[id] = completer;
-
-    try {
-      _sendPort!.send({'id': id, 'op': operation, ...params});
-      return await completer.future;
-    } catch (e) {
-      _pending.remove(id);
-      rethrow;
-    }
   }
 
   /// Detects hands in the given encoded image in the background isolate.
@@ -330,16 +224,14 @@ class HandDetectorIsolate {
   Future<List<Hand>> detectHands(List<int> imageBytes) async {
     final Uint8List bytes =
         imageBytes is Uint8List ? imageBytes : Uint8List.fromList(imageBytes);
-    final List<dynamic> result = await _sendRequest<List<dynamic>>(
+    final List<dynamic> result = await sendRequest<List<dynamic>>(
       'detect',
       {
         'bytes': TransferableTypedData.fromList([bytes]),
       },
     );
 
-    return result
-        .map((map) => Hand.fromMap(Map<String, dynamic>.from(map as Map)))
-        .toList();
+    return _deserializeHands(result);
   }
 
   /// Detects hands in a pre-decoded [cv.Mat] image in the background isolate.
@@ -385,7 +277,7 @@ class HandDetectorIsolate {
     required int height,
     int matType = 16,
   }) async {
-    final List<dynamic> result = await _sendRequest<List<dynamic>>(
+    final List<dynamic> result = await sendRequest<List<dynamic>>(
       'detectMat',
       {
         'bytes': TransferableTypedData.fromList([bytes]),
@@ -395,36 +287,22 @@ class HandDetectorIsolate {
       },
     );
 
-    return result
-        .map((map) => Hand.fromMap(Map<String, dynamic>.from(map as Map)))
-        .toList();
+    return _deserializeHands(result);
   }
+
+  List<Hand> _deserializeHands(List<dynamic> result) => result
+      .map((map) => Hand.fromMap(Map<String, dynamic>.from(map as Map)))
+      .toList();
+
+  @override
+  String get workerDisposeOp => 'dispose';
 
   /// Disposes the background isolate and releases all resources.
   ///
   /// After calling dispose, the instance cannot be reused. Create a new
   /// instance with [spawn] if needed.
-  Future<void> dispose() async {
-    for (final completer in _pending.values) {
-      if (!completer.isCompleted) {
-        completer.completeError(StateError('HandDetectorIsolate disposed'));
-      }
-    }
-    _pending.clear();
-
-    if (_sendPort != null) {
-      try {
-        _sendPort!.send({'id': -1, 'op': 'dispose'});
-      } catch (_) {}
-    }
-
-    _isolate?.kill(priority: Isolate.immediate);
-    _receivePort.close();
-
-    _isolate = null;
-    _sendPort = null;
-    _initialized = false;
-  }
+  @override
+  Future<void> dispose() => super.dispose();
 
   /// Isolate entry point: initializes the [HandDetector] and listens for detection requests.
   ///

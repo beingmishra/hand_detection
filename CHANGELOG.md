@@ -1,3 +1,15 @@
+## 2.0.0
+
+**Breaking:** `Point` now uses `double` coordinates. `BoundingBox.toMap()` format changed to corner-based.
+
+* Use shared `Point` and `BoundingBox` from `flutter_litert` 2.0.0
+* `toPixel()` now returns full-precision `double` coordinates (was truncating to `int`)
+* Remove duplicate NMS implementation, use shared `nms()` from `flutter_litert`
+* Refactor isolate worker to use `IsolateWorkerBase` from flutter_litert
+* Simplify model classes (PalmDetector, HandLandmarkModel, GestureRecognizer)
+* Remove integration tests from unit test suite
+* Remove dead test helpers (`test_config.dart`)
+
 ## 1.0.3
 
 * Update `camera_desktop` 1.0.1 -> 1.0.3

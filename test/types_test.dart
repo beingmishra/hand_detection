@@ -6,74 +6,36 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('PerformanceConfig', () {
-    test('disabled mode returns null thread count', () {
+    test('disabled mode has disabled PerformanceMode', () {
       const config = PerformanceConfig(mode: PerformanceMode.disabled);
-      expect(config.getEffectiveThreadCount(), isNull);
+      expect(config.mode, PerformanceMode.disabled);
     });
 
-    test('disabled static constant returns null thread count', () {
-      expect(PerformanceConfig.disabled.getEffectiveThreadCount(), isNull);
+    test('disabled static constant has disabled mode', () {
+      expect(PerformanceConfig.disabled.mode, PerformanceMode.disabled);
     });
 
-    test('xnnpack with null threads returns null (auto-detect signal)', () {
+    test('xnnpack with null threads', () {
       const config = PerformanceConfig.xnnpack();
       expect(config.mode, PerformanceMode.xnnpack);
       expect(config.numThreads, isNull);
-      expect(config.getEffectiveThreadCount(), isNull);
     });
 
-    test('auto with null threads returns null (auto-detect signal)', () {
+    test('auto with null threads', () {
       const config = PerformanceConfig.auto();
       expect(config.mode, PerformanceMode.auto);
       expect(config.numThreads, isNull);
-      expect(config.getEffectiveThreadCount(), isNull);
     });
 
-    test('xnnpack with explicit threads returns clamped value', () {
+    test('xnnpack with explicit threads stores value', () {
       const config = PerformanceConfig.xnnpack(numThreads: 4);
-      expect(config.getEffectiveThreadCount(), 4);
-    });
-
-    test('clamps threads to 0 minimum', () {
-      const config = PerformanceConfig.xnnpack(numThreads: -5);
-      expect(config.getEffectiveThreadCount(), 0);
-    });
-
-    test('clamps threads to 8 maximum', () {
-      const config = PerformanceConfig.xnnpack(numThreads: 100);
-      expect(config.getEffectiveThreadCount(), 8);
-    });
-
-    test('threads 0 returns 0 (single-threaded)', () {
-      const config = PerformanceConfig.xnnpack(numThreads: 0);
-      expect(config.getEffectiveThreadCount(), 0);
-    });
-
-    test('threads 1 returns 1', () {
-      const config = PerformanceConfig.xnnpack(numThreads: 1);
-      expect(config.getEffectiveThreadCount(), 1);
-    });
-
-    test('threads 8 returns 8 (max)', () {
-      const config = PerformanceConfig.xnnpack(numThreads: 8);
-      expect(config.getEffectiveThreadCount(), 8);
+      expect(config.numThreads, 4);
     });
 
     test('default constructor uses auto mode', () {
       const config = PerformanceConfig();
       expect(config.mode, PerformanceMode.auto);
       expect(config.numThreads, isNull);
-    });
-
-    test('disabled mode ignores numThreads', () {
-      const config =
-          PerformanceConfig(mode: PerformanceMode.disabled, numThreads: 4);
-      expect(config.getEffectiveThreadCount(), isNull);
-    });
-
-    test('auto mode clamps threads same as xnnpack', () {
-      const config = PerformanceConfig.auto(numThreads: 20);
-      expect(config.getEffectiveThreadCount(), 8);
     });
   });
 
@@ -283,7 +245,7 @@ void main() {
       expect(landmark.yNorm(480), closeTo(0.5, 0.0001));
     });
 
-    test('toPixel returns truncated integer coordinates', () {
+    test('toPixel returns double coordinates', () {
       final landmark = HandLandmark(
         type: HandLandmarkType.thumbTip,
         x: 123.7,
@@ -293,8 +255,8 @@ void main() {
       );
 
       final point = landmark.toPixel(640, 480);
-      expect(point.x, 123);
-      expect(point.y, 456);
+      expect(point.x, 123.7);
+      expect(point.y, 456.9);
     });
 
     test('round-trip all landmark types', () {
@@ -436,7 +398,7 @@ void main() {
       expect(under.yNorm(1), 0.0);
     });
 
-    test('toPixel with negative x and y truncates toward zero', () {
+    test('toPixel with negative x and y preserves doubles', () {
       final landmark = HandLandmark(
         type: HandLandmarkType.wrist,
         x: -10.9,
@@ -445,8 +407,8 @@ void main() {
         visibility: 1.0,
       );
       final point = landmark.toPixel(640, 480);
-      expect(point.x, -10);
-      expect(point.y, -5);
+      expect(point.x, -10.9);
+      expect(point.y, -5.3);
     });
 
     test('fromMap ignores extra fields in map', () {
@@ -470,8 +432,7 @@ void main() {
 
   group('BoundingBox', () {
     test('toMap/fromMap round-trip', () {
-      const original =
-          BoundingBox(left: 10.5, top: 20.3, right: 100.7, bottom: 200.1);
+      final original = BoundingBox.ltrb(10.5, 20.3, 100.7, 200.1);
       final map = original.toMap();
       final restored = BoundingBox.fromMap(map);
 
@@ -481,28 +442,28 @@ void main() {
       expect(restored.bottom, 200.1);
     });
 
-    test('toMap produces expected keys', () {
-      const bbox =
-          BoundingBox(left: 0.0, top: 0.0, right: 100.0, bottom: 100.0);
+    test('toMap produces corner-based keys', () {
+      final bbox = BoundingBox.ltrb(0.0, 0.0, 100.0, 100.0);
       final map = bbox.toMap();
 
-      expect(map.containsKey('left'), true);
-      expect(map.containsKey('top'), true);
-      expect(map.containsKey('right'), true);
-      expect(map.containsKey('bottom'), true);
+      expect(map.containsKey('topLeft'), true);
+      expect(map.containsKey('topRight'), true);
+      expect(map.containsKey('bottomRight'), true);
+      expect(map.containsKey('bottomLeft'), true);
     });
 
-    test('fromMap handles integer values', () {
-      final map = {'left': 0, 'top': 0, 'right': 100, 'bottom': 100};
-      final bbox = BoundingBox.fromMap(map);
+    test('fromMap restores correct LTRB values', () {
+      final original = BoundingBox.ltrb(0.0, 0.0, 100.0, 100.0);
+      final restored = BoundingBox.fromMap(original.toMap());
 
-      expect(bbox.left, 0.0);
-      expect(bbox.right, 100.0);
+      expect(restored.left, 0.0);
+      expect(restored.right, 100.0);
+      expect(restored.top, 0.0);
+      expect(restored.bottom, 100.0);
     });
 
     test('negative coordinates are stored as-is', () {
-      const bbox =
-          BoundingBox(left: -50.0, top: -30.0, right: -10.0, bottom: -5.0);
+      final bbox = BoundingBox.ltrb(-50.0, -30.0, -10.0, -5.0);
       expect(bbox.left, -50.0);
       expect(bbox.top, -30.0);
       expect(bbox.right, -10.0);
@@ -510,8 +471,7 @@ void main() {
     });
 
     test('negative coordinates round-trip via toMap/fromMap', () {
-      const original =
-          BoundingBox(left: -100.0, top: -80.0, right: -20.0, bottom: -10.0);
+      final original = BoundingBox.ltrb(-100.0, -80.0, -20.0, -10.0);
       final restored = BoundingBox.fromMap(original.toMap());
       expect(restored.left, -100.0);
       expect(restored.top, -80.0);
@@ -520,8 +480,7 @@ void main() {
     });
 
     test('zero-size box (left == right and top == bottom) is preserved', () {
-      const bbox =
-          BoundingBox(left: 50.0, top: 50.0, right: 50.0, bottom: 50.0);
+      final bbox = BoundingBox.ltrb(50.0, 50.0, 50.0, 50.0);
       expect(bbox.left, 50.0);
       expect(bbox.top, 50.0);
       expect(bbox.right, 50.0);
@@ -590,8 +549,7 @@ void main() {
   group('Hand serialization', () {
     Hand createFullHand() {
       return Hand(
-        boundingBox:
-            const BoundingBox(left: 10, top: 20, right: 200, bottom: 300),
+        boundingBox: BoundingBox.ltrb(10, 20, 200, 300),
         score: 0.95,
         landmarks: [
           HandLandmark(
@@ -644,8 +602,8 @@ void main() {
     });
 
     test('toMap/fromMap with null handedness', () {
-      const hand = Hand(
-        boundingBox: BoundingBox(left: 0, top: 0, right: 100, bottom: 100),
+      final hand = Hand(
+        boundingBox: BoundingBox.ltrb(0, 0, 100, 100),
         score: 0.8,
         landmarks: [],
         imageWidth: 640,
@@ -657,8 +615,8 @@ void main() {
     });
 
     test('toMap/fromMap with null gesture', () {
-      const hand = Hand(
-        boundingBox: BoundingBox(left: 0, top: 0, right: 100, bottom: 100),
+      final hand = Hand(
+        boundingBox: BoundingBox.ltrb(0, 0, 100, 100),
         score: 0.8,
         landmarks: [],
         imageWidth: 640,
@@ -672,8 +630,8 @@ void main() {
     });
 
     test('toMap/fromMap with null rotation fields', () {
-      const hand = Hand(
-        boundingBox: BoundingBox(left: 0, top: 0, right: 100, bottom: 100),
+      final hand = Hand(
+        boundingBox: BoundingBox.ltrb(0, 0, 100, 100),
         score: 0.8,
         landmarks: [],
         imageWidth: 640,
@@ -710,8 +668,8 @@ void main() {
     });
 
     test('hasLandmarks returns false for empty landmarks', () {
-      const hand = Hand(
-        boundingBox: BoundingBox(left: 0, top: 0, right: 100, bottom: 100),
+      final hand = Hand(
+        boundingBox: BoundingBox.ltrb(0, 0, 100, 100),
         score: 0.8,
         landmarks: [],
         imageWidth: 640,
@@ -721,8 +679,8 @@ void main() {
     });
 
     test('getLandmark returns null for missing type', () {
-      const hand = Hand(
-        boundingBox: BoundingBox(left: 0, top: 0, right: 100, bottom: 100),
+      final hand = Hand(
+        boundingBox: BoundingBox.ltrb(0, 0, 100, 100),
         score: 0.8,
         landmarks: [],
         imageWidth: 640,
@@ -752,8 +710,8 @@ void main() {
     });
 
     test('toString omits gesture info when null', () {
-      const hand = Hand(
-        boundingBox: BoundingBox(left: 0, top: 0, right: 100, bottom: 100),
+      final hand = Hand(
+        boundingBox: BoundingBox.ltrb(0, 0, 100, 100),
         score: 0.8,
         landmarks: [],
         imageWidth: 640,
@@ -788,8 +746,8 @@ void main() {
     });
 
     test('toString with null rotation does not throw', () {
-      const hand = Hand(
-        boundingBox: BoundingBox(left: 0, top: 0, right: 100, bottom: 100),
+      final hand = Hand(
+        boundingBox: BoundingBox.ltrb(0, 0, 100, 100),
         score: 0.5,
         landmarks: [],
         imageWidth: 640,

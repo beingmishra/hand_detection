@@ -294,47 +294,45 @@ void main() {
 
   group('normalizeRadians', () {
     test('zero stays zero', () {
-      expect(PalmDetector.normalizeRadians(0.0), closeTo(0.0, 0.0001));
+      expect(normalizeRadians(0.0), closeTo(0.0, 0.0001));
     });
 
     test('pi stays pi (approximately)', () {
       // pi is the boundary, result should be close to -pi or pi
-      final result = PalmDetector.normalizeRadians(math.pi);
+      final result = normalizeRadians(math.pi);
       expect(result.abs(), closeTo(math.pi, 0.0001));
     });
 
     test('values within [-pi, pi] stay unchanged', () {
-      expect(PalmDetector.normalizeRadians(1.0), closeTo(1.0, 0.0001));
-      expect(PalmDetector.normalizeRadians(-1.0), closeTo(-1.0, 0.0001));
-      expect(PalmDetector.normalizeRadians(2.0), closeTo(2.0, 0.0001));
-      expect(PalmDetector.normalizeRadians(-2.0), closeTo(-2.0, 0.0001));
+      expect(normalizeRadians(1.0), closeTo(1.0, 0.0001));
+      expect(normalizeRadians(-1.0), closeTo(-1.0, 0.0001));
+      expect(normalizeRadians(2.0), closeTo(2.0, 0.0001));
+      expect(normalizeRadians(-2.0), closeTo(-2.0, 0.0001));
     });
 
     test('values outside range are wrapped', () {
       // 4.0 > pi, should wrap to 4.0 - 2*pi ≈ -2.283
-      expect(
-          PalmDetector.normalizeRadians(4.0), closeTo(4.0 - 2 * math.pi, 0.01));
+      expect(normalizeRadians(4.0), closeTo(4.0 - 2 * math.pi, 0.01));
 
       // -4.0 < -pi, should wrap to -4.0 + 2*pi ≈ 2.283
-      expect(PalmDetector.normalizeRadians(-4.0),
-          closeTo(-4.0 + 2 * math.pi, 0.01));
+      expect(normalizeRadians(-4.0), closeTo(-4.0 + 2 * math.pi, 0.01));
     });
 
     test('2*pi wraps to approximately 0', () {
-      expect(PalmDetector.normalizeRadians(2 * math.pi), closeTo(0.0, 0.0001));
+      expect(normalizeRadians(2 * math.pi), closeTo(0.0, 0.0001));
     });
 
     test('-2*pi wraps to approximately 0', () {
-      expect(PalmDetector.normalizeRadians(-2 * math.pi), closeTo(0.0, 0.0001));
+      expect(normalizeRadians(-2 * math.pi), closeTo(0.0, 0.0001));
     });
 
     test('large positive values wrap correctly', () {
       // 10*pi should wrap to 0
-      expect(PalmDetector.normalizeRadians(10 * math.pi), closeTo(0.0, 0.001));
+      expect(normalizeRadians(10 * math.pi), closeTo(0.0, 0.001));
     });
 
     test('large negative values wrap correctly', () {
-      expect(PalmDetector.normalizeRadians(-10 * math.pi), closeTo(0.0, 0.001));
+      expect(normalizeRadians(-10 * math.pi), closeTo(0.0, 0.001));
     });
   });
 

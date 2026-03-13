@@ -3,7 +3,6 @@ import 'package:flutter_litert/flutter_litert.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:hand_detection/hand_detection.dart';
 import 'package:hand_detection/src/util/image_utils.dart';
-import 'package:hand_detection/src/models/palm_detector.dart';
 import 'package:hand_detection/src/models/hand_landmark_model.dart';
 
 void main() {
@@ -84,14 +83,14 @@ void main() {
 
     test('normalizeRadians normalizes angles correctly', () {
       // Test values within range
-      expect(PalmDetector.normalizeRadians(0), closeTo(0, 0.0001));
-      expect(PalmDetector.normalizeRadians(1.0), closeTo(1.0, 0.0001));
-      expect(PalmDetector.normalizeRadians(-1.0), closeTo(-1.0, 0.0001));
+      expect(normalizeRadians(0), closeTo(0, 0.0001));
+      expect(normalizeRadians(1.0), closeTo(1.0, 0.0001));
+      expect(normalizeRadians(-1.0), closeTo(-1.0, 0.0001));
 
       // Test values outside range
       const pi = 3.14159265359;
-      expect(PalmDetector.normalizeRadians(4.0), closeTo(4.0 - 2 * pi, 0.01));
-      expect(PalmDetector.normalizeRadians(-4.0), closeTo(-4.0 + 2 * pi, 0.01));
+      expect(normalizeRadians(4.0), closeTo(4.0 - 2 * pi, 0.01));
+      expect(normalizeRadians(-4.0), closeTo(-4.0 + 2 * pi, 0.01));
     });
   });
 
@@ -139,7 +138,7 @@ void main() {
       final ratioOut = <double>[];
       final dwdhOut = <int>[];
 
-      final result = ImageUtils.letterbox224(src, ratioOut, dwdhOut);
+      final result = ImageUtils.letterbox(src, 224, 224, ratioOut, dwdhOut);
 
       try {
         expect(result.cols, 224);
@@ -200,7 +199,7 @@ void main() {
 
     test('Hand can include handedness', () {
       final hand = Hand(
-        boundingBox: BoundingBox(left: 0, top: 0, right: 100, bottom: 100),
+        boundingBox: BoundingBox.ltrb(0, 0, 100, 100),
         score: 0.9,
         landmarks: const [],
         imageWidth: 640,

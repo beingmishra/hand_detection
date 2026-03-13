@@ -108,12 +108,17 @@ final double top = boundingBox.top;
 final double right = boundingBox.right;
 final double bottom = boundingBox.bottom;
 
-// Calculate dimensions
-final double width = boundingBox.right - boundingBox.left;
-final double height = boundingBox.bottom - boundingBox.top;
+// Dimensions and center
+final double width = boundingBox.width;
+final double height = boundingBox.height;
+final Point center = boundingBox.center;
+
+// Corner points (supports rotated boxes)
+final Point topLeft = boundingBox.topLeft;
+final List<Point> corners = boundingBox.corners;
 
 print('Box: ($left, $top) to ($right, $bottom)');
-print('Size: $width x $height');
+print('Size: $width x $height, center: (${center.x}, ${center.y})');
 ```
 
 ## Hand Landmarks (21-Point)

@@ -52,44 +52,30 @@ class HandLandmarkModelRunner {
   HandLandmarkModelRunner({int poolSize = 1})
       : _pool = InterpreterPool(poolSize: poolSize);
 
-  /// Initializes the hand landmark model with the specified variant.
+  /// Initializes the hand landmark model.
   ///
   /// Creates a pool of interpreter instances based on the configured [poolSize].
   /// Each interpreter is loaded independently, allowing for parallel inference execution.
   ///
   /// Parameters:
-  /// - [model]: Which hand landmark variant to use (lite, full, or heavy)
   /// - [performanceConfig]: Optional performance configuration for TFLite delegates.
-  Future<void> initialize(
-    HandLandmarkModel model, {
+  Future<void> initialize({
     PerformanceConfig? performanceConfig,
   }) async {
     if (_isInitialized) await dispose();
 
-    final String path = _getModelPath(model);
+    final String path =
+        'packages/hand_detection/assets/models/hand_landmark_full.tflite';
 
-    await _pool.initialize(
-      (options, _) async {
+    await _initializePool(
+      performanceConfig: performanceConfig,
+      loader: (options) async {
         final interpreter = await Interpreter.fromAsset(path, options: options);
         interpreter.resizeInputTensor(0, [1, inputSize, inputSize, 3]);
         interpreter.allocateTensors();
         return interpreter;
       },
-      performanceConfig: performanceConfig,
     );
-
-    _buffers.clear();
-    for (final interp in _pool.interpreters) {
-      _buffers[interp] = _HandBuffers(
-        inputBuffer: Float32List(inputSize * inputSize * 3),
-        outputLandmarks: [List<double>.filled(63, 0.0, growable: false)],
-        outputScore: [List<double>.filled(1, 0.0, growable: false)],
-        outputHandedness: [List<double>.filled(1, 0.0, growable: false)],
-        outputWorldLandmarks: [List<double>.filled(63, 0.0, growable: false)],
-      );
-    }
-
-    _isInitialized = true;
   }
 
   /// Initializes the hand landmark model from pre-loaded model bytes.
@@ -102,17 +88,31 @@ class HandLandmarkModelRunner {
   }) async {
     if (_isInitialized) await dispose();
 
-    await _pool.initialize(
-      (options, _) async {
+    await _initializePool(
+      performanceConfig: performanceConfig,
+      loader: (options) async {
         final interpreter =
             Interpreter.fromBuffer(modelBytes, options: options);
         interpreter.resizeInputTensor(0, [1, inputSize, inputSize, 3]);
         interpreter.allocateTensors();
         return interpreter;
       },
+    );
+  }
+
+  Future<void> _initializePool({
+    required PerformanceConfig? performanceConfig,
+    required Future<Interpreter> Function(InterpreterOptions) loader,
+  }) async {
+    await _pool.initialize(
+      (options, _) => loader(options),
       performanceConfig: performanceConfig,
     );
+    _allocateBuffers();
+    _isInitialized = true;
+  }
 
+  void _allocateBuffers() {
     _buffers.clear();
     for (final interp in _pool.interpreters) {
       _buffers[interp] = _HandBuffers(
@@ -123,13 +123,6 @@ class HandLandmarkModelRunner {
         outputWorldLandmarks: [List<double>.filled(63, 0.0, growable: false)],
       );
     }
-
-    _isInitialized = true;
-  }
-
-  /// Returns the asset path for the given [HandLandmarkModel] variant.
-  String _getModelPath(HandLandmarkModel model) {
-    return 'packages/hand_detection/assets/models/hand_landmark_full.tflite';
   }
 
   /// Returns true if the model runner has been initialized and is ready to use.
@@ -210,6 +203,23 @@ class HandLandmarkModelRunner {
     });
   }
 
+  /// Iterates the flat landmark buffer and builds a [HandLandmark] list.
+  ///
+  /// [data] is a flat list of `numHandLandmarks * 3` values (x, y, z interleaved).
+  /// [transform] receives the base index and a 3-element slice [x, y, z] and
+  /// returns the [HandLandmark] for that point.
+  List<HandLandmark> _parseLandmarkList(
+    List<double> data,
+    HandLandmark Function(int base, List<double> vals) transform,
+  ) {
+    final result = <HandLandmark>[];
+    for (int i = 0; i < numHandLandmarks; i++) {
+      final base = i * 3;
+      result.add(transform(base, [data[base], data[base + 1], data[base + 2]]));
+    }
+    return result;
+  }
+
   /// Parses model outputs into HandLandmarks.
   ///
   /// The model outputs:
@@ -242,39 +252,30 @@ class HandLandmarkModelRunner {
     final handedness = rawHandedness > 0.5 ? Handedness.right : Handedness.left;
 
     final raw = landmarksData[0];
-    final landmarks = <HandLandmark>[];
-
-    for (int i = 0; i < numHandLandmarks; i++) {
-      final base = i * 3;
-
-      final normalizedX = raw[base] / inputSize;
-      final normalizedY = raw[base + 1] / inputSize;
-      final x = (normalizedX * inputSize - halfPadW) / resizeScaleW;
-      final y = (normalizedY * inputSize - halfPadH) / resizeScaleH;
-      final z = raw[base + 2];
-
-      landmarks.add(HandLandmark(
-        type: HandLandmarkType.values[i],
-        x: x.clamp(0.0, cropWidth.toDouble()),
-        y: y.clamp(0.0, cropHeight.toDouble()),
-        z: z,
+    final landmarks = _parseLandmarkList(
+      raw,
+      (base, vals) => HandLandmark(
+        type: HandLandmarkType.values[base ~/ 3],
+        x: ((vals[0] - halfPadW) / resizeScaleW)
+            .clamp(0.0, cropWidth.toDouble()),
+        y: ((vals[1] - halfPadH) / resizeScaleH)
+            .clamp(0.0, cropHeight.toDouble()),
+        z: vals[2],
         visibility: score,
-      ));
-    }
+      ),
+    );
 
     final rawWorld = worldLandmarksData[0];
-    final worldLandmarks = <HandLandmark>[];
-
-    for (int i = 0; i < numHandLandmarks; i++) {
-      final base = i * 3;
-      worldLandmarks.add(HandLandmark(
-        type: HandLandmarkType.values[i],
-        x: rawWorld[base],
-        y: rawWorld[base + 1],
-        z: rawWorld[base + 2],
+    final worldLandmarks = _parseLandmarkList(
+      rawWorld,
+      (base, vals) => HandLandmark(
+        type: HandLandmarkType.values[base ~/ 3],
+        x: vals[0],
+        y: vals[1],
+        z: vals[2],
         visibility: score,
-      ));
-    }
+      ),
+    );
 
     return HandLandmarks(
       landmarks: landmarks,

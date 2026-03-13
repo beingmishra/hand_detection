@@ -1,5 +1,8 @@
+import 'package:flutter_litert/flutter_litert.dart'
+    show BoundingBox, LandmarkMixin;
+
 export 'package:flutter_litert/flutter_litert.dart'
-    show PerformanceMode, PerformanceConfig;
+    show PerformanceMode, PerformanceConfig, Point, BoundingBox;
 
 /// Hand landmark model variant for landmark extraction.
 ///
@@ -135,14 +138,16 @@ class HandLandmarks {
 ///
 /// Coordinates are in the original image space (pixels).
 /// The [z] coordinate represents depth relative to the center (not absolute depth).
-class HandLandmark {
+class HandLandmark with LandmarkMixin {
   /// The landmark type this represents
   final HandLandmarkType type;
 
   /// X coordinate in pixels (original image space)
+  @override
   final double x;
 
   /// Y coordinate in pixels (original image space)
+  @override
   final double y;
 
   /// Z coordinate representing depth (not absolute depth)
@@ -177,17 +182,6 @@ class HandLandmark {
         z: (map['z'] as num).toDouble(),
         visibility: (map['visibility'] as num).toDouble(),
       );
-
-  /// Converts x coordinate to normalized range (0.0 to 1.0)
-  double xNorm(int imageWidth) => (x / imageWidth).clamp(0.0, 1.0);
-
-  /// Converts y coordinate to normalized range (0.0 to 1.0)
-  double yNorm(int imageHeight) => (y / imageHeight).clamp(0.0, 1.0);
-
-  /// Converts landmark coordinates to integer pixel point
-  Point toPixel(int imageWidth, int imageHeight) {
-    return Point(x.toInt(), y.toInt());
-  }
 }
 
 /// Handedness type indicating left or right hand.
@@ -288,61 +282,6 @@ enum HandLandmarkType {
 
 /// Number of hand landmarks (21 for MediaPipe hand model).
 const int numHandLandmarks = 21;
-
-/// 2D integer pixel coordinate.
-class Point {
-  /// X coordinate in pixels
-  final int x;
-
-  /// Y coordinate in pixels
-  final int y;
-
-  /// Creates a 2D pixel coordinate at position ([x], [y]).
-  Point(this.x, this.y);
-}
-
-/// Axis-aligned bounding box in pixel coordinates.
-///
-/// Coordinates are in the original image space (not normalized).
-class BoundingBox {
-  /// Left edge x-coordinate in pixels
-  final double left;
-
-  /// Top edge y-coordinate in pixels
-  final double top;
-
-  /// Right edge x-coordinate in pixels
-  final double right;
-
-  /// Bottom edge y-coordinate in pixels
-  final double bottom;
-
-  /// Creates an axis-aligned bounding box with the specified edges.
-  ///
-  /// All coordinates are in pixels in the original image space.
-  const BoundingBox({
-    required this.left,
-    required this.top,
-    required this.right,
-    required this.bottom,
-  });
-
-  /// Serializes this bounding box to a map for cross-isolate transfer.
-  Map<String, dynamic> toMap() => {
-        'left': left,
-        'top': top,
-        'right': right,
-        'bottom': bottom,
-      };
-
-  /// Deserializes a bounding box from a map.
-  static BoundingBox fromMap(Map<String, dynamic> map) => BoundingBox(
-        left: (map['left'] as num).toDouble(),
-        top: (map['top'] as num).toDouble(),
-        right: (map['right'] as num).toDouble(),
-        bottom: (map['bottom'] as num).toDouble(),
-      );
-}
 
 /// Defines the standard skeleton connections between hand landmarks.
 ///
@@ -511,11 +450,10 @@ class Hand {
 
   /// Gets a specific landmark by type, or null if not found
   HandLandmark? getLandmark(HandLandmarkType type) {
-    try {
-      return landmarks.firstWhere((l) => l.type == type);
-    } catch (_) {
-      return null;
+    for (final l in landmarks) {
+      if (l.type == type) return l;
     }
+    return null;
   }
 
   /// Returns true if this hand has landmarks

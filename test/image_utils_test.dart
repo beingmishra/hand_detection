@@ -211,8 +211,7 @@ void main() {
         score: 0.9,
       );
 
-      final result =
-          ImageUtils.rotateAndCropRectangle(image, palm, padding: false);
+      final result = ImageUtils.rotateAndCropRectangle(image, palm);
 
       try {
         expect(result, isNotNull);
@@ -351,7 +350,7 @@ void main() {
       final ratioOut = <double>[];
       final dwdhOut = <int>[];
 
-      final result = ImageUtils.letterbox256(src, ratioOut, dwdhOut);
+      final result = ImageUtils.letterbox(src, 256, 256, ratioOut, dwdhOut);
 
       try {
         expect(result.cols, 256);
@@ -369,7 +368,7 @@ void main() {
       final ratioOut = <double>[];
       final dwdhOut = <int>[];
 
-      final result = ImageUtils.letterbox224(src, ratioOut, dwdhOut);
+      final result = ImageUtils.letterbox(src, 224, 224, ratioOut, dwdhOut);
 
       try {
         expect(result.cols, 224);

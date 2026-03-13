@@ -5,7 +5,7 @@ import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:meta/meta.dart';
 import 'package:flutter_litert/flutter_litert.dart';
 import 'package:flutter_litert/flutter_litert.dart' as litert
-    show normalizeRadians, sigmoid;
+    show normalizeRadians, sigmoid, weightedNms;
 import '../util/image_utils.dart';
 
 /// A detected palm with rotation rectangle parameters.
@@ -37,18 +37,6 @@ class PalmDetection {
   });
 }
 
-/// Axis-aligned bounding box for NMS IoU computation.
-///
-/// Precomputed from PalmDetection to avoid redundant conversions in O(n²) NMS loop.
-class _AABB {
-  final double left;
-  final double top;
-  final double right;
-  final double bottom;
-
-  const _AABB(this.left, this.top, this.right, this.bottom);
-}
-
 /// SSD-based palm detector for Stage 1 of the hand detection pipeline.
 ///
 /// Detects palm locations in images using a Single Shot Detector (SSD) architecture
@@ -57,10 +45,8 @@ class _AABB {
 ///
 /// This is a direct port of the Python PalmDetection class.
 class PalmDetector {
-  IsolateInterpreter? _iso;
-  Interpreter? _interpreter;
+  final InterpreterPool _pool = InterpreterPool(poolSize: 1);
   bool _isInitialized = false;
-  Delegate? _delegate;
 
   /// Input dimensions (192x192 for palm detection model).
   late int _inH;
@@ -95,68 +81,14 @@ class PalmDetector {
   /// Creates a palm detector with the specified score threshold.
   PalmDetector({this.scoreThreshold = 0.45});
 
-  /// Normalizes angle to range [-pi, pi].
-  static double normalizeRadians(double angle) =>
-      litert.normalizeRadians(angle);
-
   /// Initializes the palm detector by loading the TFLite model.
   Future<void> initialize({PerformanceConfig? performanceConfig}) async {
     const String assetPath =
         'packages/hand_detection/assets/models/hand_detection.tflite';
-
-    if (_isInitialized) await dispose();
-
-    final (options, delegate) = InterpreterFactory.create(performanceConfig);
-    _delegate = delegate;
-    final interpreter =
-        await Interpreter.fromAsset(assetPath, options: options);
-    _interpreter = interpreter;
-    interpreter.allocateTensors();
-
-    final inTensor = interpreter.getInputTensor(0);
-    final inShape = inTensor.shape;
-    _inH = inShape[1];
-    _inW = inShape[2];
-
-    final anchorOptions = SSDAnchorOptions(
-      numLayers: 4,
-      minScale: 0.1484375,
-      maxScale: 0.75,
-      inputSizeHeight: _inH,
-      inputSizeWidth: _inW,
-      anchorOffsetX: 0.5,
-      anchorOffsetY: 0.5,
-      strides: [8, 16, 16, 16],
-      aspectRatios: [1.0],
-      reduceBoxesInLowestLayer: false,
-      interpolatedScaleAspectRatio: 1.0,
-      fixedAnchorSize: true,
+    await _initWith(
+      (options) async => Interpreter.fromAsset(assetPath, options: options),
+      performanceConfig,
     );
-    _anchors = generateAnchors(anchorOptions);
-
-    final numAnchors = _anchors.length;
-    _outputBoxes = List.generate(
-      1,
-      (_) => List.generate(
-        numAnchors,
-        (_) => List<double>.filled(18, 0.0, growable: false),
-        growable: false,
-      ),
-      growable: false,
-    );
-    _outputScores = List.generate(
-      1,
-      (_) => List.generate(
-        numAnchors,
-        (_) => List<double>.filled(1, 0.0, growable: false),
-        growable: false,
-      ),
-      growable: false,
-    );
-
-    _iso =
-        await InterpreterFactory.createIsolateIfNeeded(interpreter, _delegate);
-    _isInitialized = true;
   }
 
   /// Initializes the palm detector from pre-loaded model bytes.
@@ -167,14 +99,30 @@ class PalmDetector {
     Uint8List modelBytes, {
     PerformanceConfig? performanceConfig,
   }) async {
+    await _initWith(
+      (options) async => Interpreter.fromBuffer(modelBytes, options: options),
+      performanceConfig,
+    );
+  }
+
+  Future<void> _initWith(
+    Future<Interpreter> Function(InterpreterOptions) loader,
+    PerformanceConfig? performanceConfig,
+  ) async {
     if (_isInitialized) await dispose();
+    await _pool.initialize(
+      (options, _) async {
+        final interpreter = await loader(options);
+        interpreter.allocateTensors();
+        _setupAnchorsAndBuffers(interpreter);
+        return interpreter;
+      },
+      performanceConfig: performanceConfig,
+    );
+    _isInitialized = true;
+  }
 
-    final (options, delegate) = InterpreterFactory.create(performanceConfig);
-    _delegate = delegate;
-    final interpreter = Interpreter.fromBuffer(modelBytes, options: options);
-    _interpreter = interpreter;
-    interpreter.allocateTensors();
-
+  void _setupAnchorsAndBuffers(Interpreter interpreter) {
     final inTensor = interpreter.getInputTensor(0);
     final inShape = inTensor.shape;
     _inH = inShape[1];
@@ -215,10 +163,6 @@ class PalmDetector {
       ),
       growable: false,
     );
-
-    _iso =
-        await InterpreterFactory.createIsolateIfNeeded(interpreter, _delegate);
-    _isInitialized = true;
   }
 
   /// Returns true if the detector has been initialized.
@@ -226,12 +170,7 @@ class PalmDetector {
 
   /// Disposes the detector and releases resources.
   Future<void> dispose() async {
-    _iso?.close();
-    _iso = null;
-    _interpreter?.close();
-    _interpreter = null;
-    _delegate?.delete();
-    _delegate = null;
+    await _pool.dispose();
     _inputBuffer = null;
     _outputBoxes = null;
     _outputScores = null;
@@ -243,7 +182,7 @@ class PalmDetector {
   /// Returns a list of [PalmDetection] objects containing rotation rectangle
   /// parameters for each detected palm.
   Future<List<PalmDetection>> detectOnMat(cv.Mat image) async {
-    if (!_isInitialized || _interpreter == null) {
+    if (!_isInitialized) {
       throw StateError('PalmDetector not initialized.');
     }
 
@@ -272,11 +211,13 @@ class PalmDetector {
       1: _outputScores!,
     };
 
-    if (_iso != null) {
-      await _iso!.runForMultipleInputs(inputs, outputs);
-    } else {
-      _interpreter!.runForMultipleInputs(inputs, outputs);
-    }
+    await _pool.withInterpreter((interp, iso) async {
+      if (iso != null) {
+        await iso.runForMultipleInputs(inputs, outputs);
+      } else {
+        interp.runForMultipleInputs(inputs, outputs);
+      }
+    });
 
     final decodedBoxes = _decodeBoxes(
       _outputBoxes![0],
@@ -361,7 +302,7 @@ class PalmDetector {
         final kp02Y = kp2Y - kp0Y;
         var sqnRrSize = 2.9 * boxSize;
         var rotation = 0.5 * math.pi - math.atan2(-kp02Y, kp02X);
-        rotation = normalizeRadians(rotation);
+        rotation = litert.normalizeRadians(rotation);
         var sqnRrCenterX = boxX + 0.5 * boxSize * math.sin(rotation);
         var sqnRrCenterY = boxY - 0.5 * boxSize * math.cos(rotation);
 
@@ -388,79 +329,46 @@ class PalmDetector {
     return _nms(palms);
   }
 
-  /// IoU-based Non-Maximum Suppression for palm detections.
+  /// Weighted Non-Maximum Suppression for palm detections.
   ///
-  /// Uses Intersection-over-Union to properly handle overlapping boxes,
-  /// rather than center distance which incorrectly suppresses non-overlapping hands.
-  ///
-  /// Optimization: Precomputes AABBs once (O(n)) before the O(n²) comparison loop
-  /// to avoid redundant coordinate conversions.
+  /// Fuses overlapping boxes by score-weighted coordinate averaging,
+  /// producing tighter bounding boxes from the many overlapping SSD anchors
+  /// that fire on the same palm. Keeps the highest-scoring detection's
+  /// rotation (derived from keypoints) while averaging center and size.
   List<PalmDetection> _nms(List<PalmDetection> palms,
       {double iouThreshold = 0.45}) {
     if (palms.isEmpty) return palms;
-
     final sorted = List<PalmDetection>.from(palms)
       ..sort((a, b) => b.score.compareTo(a.score));
-
-    final aabbs = List<_AABB>.generate(
-      sorted.length,
-      (i) => _palmToAABB(sorted[i]),
-      growable: false,
-    );
-
-    final keep = <PalmDetection>[];
-    final suppressed = List<bool>.filled(sorted.length, false);
-
-    for (int i = 0; i < sorted.length; i++) {
-      if (suppressed[i]) continue;
-      keep.add(sorted[i]);
-
-      for (int j = i + 1; j < sorted.length; j++) {
-        if (suppressed[j]) continue;
-
-        final iou = _calculateIoUFromAABB(aabbs[i], aabbs[j]);
-        if (iou >= iouThreshold) {
-          suppressed[j] = true;
-        }
-      }
-    }
-
-    return keep;
+    final boxes = sorted.map(_palmToXYXY).toList();
+    final scores = sorted.map((p) => p.score).toList();
+    final results = litert.weightedNms(boxes, scores, iouThres: iouThreshold);
+    final maxDim = math.max(_imageWidth, _imageHeight).toDouble();
+    return [
+      for (final r in results)
+        PalmDetection(
+          sqnRrSize:
+              math.max(r.box[2] - r.box[0], r.box[3] - r.box[1]) / maxDim,
+          rotation: sorted[r.index].rotation,
+          sqnRrCenterX: (r.box[0] + r.box[2]) / 2 / _imageWidth,
+          sqnRrCenterY: (r.box[1] + r.box[3]) / 2 / _imageHeight,
+          score: r.score,
+        ),
+    ];
   }
 
-  /// Converts a PalmDetection to an axis-aligned bounding box.
-  _AABB _palmToAABB(PalmDetection p) {
+  /// Converts a PalmDetection to an XYXY bounding box [left, top, right, bottom].
+  List<double> _palmToXYXY(PalmDetection p) {
     final maxDim = math.max(_imageWidth, _imageHeight).toDouble();
     final halfSize = (p.sqnRrSize * maxDim) / 2;
     final centerX = p.sqnRrCenterX * _imageWidth;
     final centerY = p.sqnRrCenterY * _imageHeight;
-    return _AABB(
+    return [
       centerX - halfSize,
       centerY - halfSize,
       centerX + halfSize,
       centerY + halfSize,
-    );
-  }
-
-  /// Calculates Intersection over Union for two precomputed AABBs.
-  double _calculateIoUFromAABB(_AABB a, _AABB b) {
-    final interLeft = math.max(a.left, b.left);
-    final interRight = math.min(a.right, b.right);
-    final interTop = math.max(a.top, b.top);
-    final interBottom = math.min(a.bottom, b.bottom);
-
-    if (interRight <= interLeft || interBottom <= interTop) {
-      return 0.0;
-    }
-
-    final interArea = (interRight - interLeft) * (interBottom - interTop);
-
-    final aArea = (a.right - a.left) * (a.bottom - a.top);
-    final bArea = (b.right - b.left) * (b.bottom - b.top);
-    final unionArea = aArea + bArea - interArea;
-
-    if (unionArea <= 0) return 0.0;
-    return interArea / unionArea;
+    ];
   }
 
   /// Exposes anchor generation for testing.

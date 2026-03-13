@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:meta/meta.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:flutter_litert/flutter_litert.dart';
 import '../models/palm_detector.dart';
@@ -19,11 +20,12 @@ class ImageUtils {
     int resizeWidth,
     int resizeHeight,
   ) {
-    final params = computeAspectPadParams(
+    final params = computeLetterboxParams(
       srcWidth: image.cols,
       srcHeight: image.rows,
       targetWidth: resizeWidth,
       targetHeight: resizeHeight,
+      roundDimensions: false,
     );
 
     final resizedImage = cv.resize(
@@ -45,6 +47,19 @@ class ImageUtils {
     return (paddedImage, resizedImage);
   }
 
+  /// Returns the center and size of a palm detection in pixel coordinates.
+  static ({double cx, double cy, double size}) palmCoordinates(
+    PalmDetection palm,
+    int imageWidth,
+    int imageHeight,
+  ) {
+    return (
+      cx: palm.sqnRrCenterX * imageWidth,
+      cy: palm.sqnRrCenterY * imageHeight,
+      size: palm.sqnRrSize * math.max(imageWidth, imageHeight),
+    );
+  }
+
   /// Crops a rotated rectangle from an image using OpenCV's warpAffine.
   ///
   /// This is used to extract hand regions with proper rotation alignment
@@ -54,21 +69,18 @@ class ImageUtils {
   /// Parameters:
   /// - [image]: Source image
   /// - [palm]: Palm detection containing rotation rectangle parameters
-  /// - [padding]: Whether to handle edge cases (always handled via border mode)
   ///
   /// Returns the cropped and rotated hand image, or null if the crop is invalid.
   static cv.Mat? rotateAndCropRectangle(
     cv.Mat image,
-    PalmDetection palm, {
-    bool padding = true,
-  }) {
+    PalmDetection palm,
+  ) {
     final imageWidth = image.cols;
     final imageHeight = image.rows;
 
-    final cx = palm.sqnRrCenterX * imageWidth;
-    final cy = palm.sqnRrCenterY * imageHeight;
-
-    final size = (palm.sqnRrSize * math.max(imageWidth, imageHeight)).round();
+    final (:cx, :cy, size: sizeD) =
+        palmCoordinates(palm, imageWidth, imageHeight);
+    final size = sizeD.round();
     if (size <= 0) return null;
 
     final angleDegrees = palm.rotation * 180.0 / math.pi;
@@ -100,11 +112,10 @@ class ImageUtils {
   ///
   /// Returns the crop parameters needed for landmark extraction:
   /// [cx, cy, width, height, angleDegrees]
+  @visibleForTesting
   static List<double> palmToRect(
       PalmDetection palm, int imageWidth, int imageHeight) {
-    final cx = palm.sqnRrCenterX * imageWidth;
-    final cy = palm.sqnRrCenterY * imageHeight;
-    final size = palm.sqnRrSize * math.max(imageWidth, imageHeight);
+    final (:cx, :cy, :size) = palmCoordinates(palm, imageWidth, imageHeight);
     final angleDegrees = palm.rotation * 180.0 / math.pi;
 
     return [cx, cy, size, size, angleDegrees];
@@ -125,6 +136,7 @@ class ImageUtils {
   /// - [dwdhOut]: Output parameter that receives padding [dw, dh] values
   ///
   /// Returns the letterboxed image with dimensions [tw]x[th].
+  @visibleForTesting
   static cv.Mat letterbox(
     cv.Mat src,
     int tw,
@@ -165,30 +177,6 @@ class ImageUtils {
     return canvas;
   }
 
-  /// Applies letterbox preprocessing to 256x256 dimensions.
-  ///
-  /// Convenience method that calls [letterbox] with fixed 256x256 target size.
-  /// Used for hand landmark model preprocessing.
-  static cv.Mat letterbox256(
-    cv.Mat src,
-    List<double> ratioOut,
-    List<int> dwdhOut,
-  ) {
-    return letterbox(src, 256, 256, ratioOut, dwdhOut);
-  }
-
-  /// Applies letterbox preprocessing to 224x224 dimensions.
-  ///
-  /// Convenience method that calls [letterbox] with fixed 224x224 target size.
-  /// Used for hand landmark model preprocessing (MediaPipe format).
-  static cv.Mat letterbox224(
-    cv.Mat src,
-    List<double> ratioOut,
-    List<int> dwdhOut,
-  ) {
-    return letterbox(src, 224, 224, ratioOut, dwdhOut);
-  }
-
   /// Converts a cv.Mat to a flat Float32List tensor for TensorFlow Lite.
   ///
   /// Converts pixel values from 0-255 range to normalized 0.0-1.0 range.
@@ -220,6 +208,7 @@ class ImageUtils {
   /// - [reuse]: Optional tensor buffer to reuse (must match dimensions)
   ///
   /// Returns a 4D tensor [1, height, width, 3] with normalized pixel values.
+  @visibleForTesting
   static List<List<List<List<double>>>> matToNHWC4D(
     cv.Mat mat,
     int width,

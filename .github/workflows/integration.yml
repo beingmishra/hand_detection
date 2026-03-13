@@ -57,6 +57,10 @@ jobs:
           channel: ${{ matrix.flutter-channel }}
           cache: true
 
+      # camera_desktop has mixed-language sources that SPM doesn't support
+      - name: Disable Swift Package Manager
+        run: flutter config --no-enable-swift-package-manager
+
       - name: Cache CocoaPods
         uses: actions/cache@v4
         with:
@@ -87,7 +91,13 @@ jobs:
             echo "========================================="
             pkill -9 -f "hand_detection_example" 2>/dev/null || true
             sleep 2
-            if ! flutter test "integration_test/$f" -d macos; then
+            OUTPUT=$(flutter test "integration_test/$f" -d macos 2>&1) || true
+            echo "$OUTPUT"
+            # Flutter desktop integration tests may exit non-zero even when
+            # all tests pass (app process teardown issue). Check the actual
+            # test output instead of relying on the exit code alone.
+            if echo "$OUTPUT" | grep -q "Some tests failed" || \
+               ! echo "$OUTPUT" | grep -qE "tests passed"; then
               FAILED+=("$f")
               echo "::error::FAILED: $f"
             fi
@@ -203,7 +213,13 @@ jobs:
             echo "========================================="
             pkill -9 -f "hand_detection_example" 2>/dev/null || true
             sleep 2
-            if ! xvfb-run flutter test "integration_test/$f" -d linux; then
+            OUTPUT=$(xvfb-run flutter test "integration_test/$f" -d linux 2>&1) || true
+            echo "$OUTPUT"
+            # Flutter desktop integration tests may exit non-zero even when
+            # all tests pass (app process teardown issue). Check the actual
+            # test output instead of relying on the exit code alone.
+            if echo "$OUTPUT" | grep -q "Some tests failed" || \
+               ! echo "$OUTPUT" | grep -qE "tests passed"; then
               FAILED+=("$f")
               echo "::error::FAILED: $f"
             fi
@@ -263,7 +279,13 @@ jobs:
             echo "========================================="
             taskkill //F //IM "hand_detection_example.exe" 2>/dev/null || true
             sleep 2
-            if ! flutter test "integration_test/$f" -d windows; then
+            OUTPUT=$(flutter test "integration_test/$f" -d windows 2>&1) || true
+            echo "$OUTPUT"
+            # Flutter desktop integration tests may exit non-zero even when
+            # all tests pass (app process teardown issue). Check the actual
+            # test output instead of relying on the exit code alone.
+            if echo "$OUTPUT" | grep -q "Some tests failed" || \
+               ! echo "$OUTPUT" | grep -qE "tests passed"; then
               FAILED+=("$f")
               echo "::error::FAILED: $f"
             fi

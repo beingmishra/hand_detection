@@ -29,12 +29,8 @@ import '../types.dart';
 /// await recognizer.dispose();
 /// ```
 class GestureRecognizer {
-  Interpreter? _embedderInterpreter;
-  Interpreter? _classifierInterpreter;
-  IsolateInterpreter? _embedderIso;
-  IsolateInterpreter? _classifierIso;
-  Delegate? _embedderDelegate;
-  Delegate? _classifierDelegate;
+  final InterpreterPool _embedderPool = InterpreterPool(poolSize: 1);
+  final InterpreterPool _classifierPool = InterpreterPool(poolSize: 1);
 
   bool _isInitialized = false;
 
@@ -72,65 +68,16 @@ class GestureRecognizer {
 
     const embedderPath =
         'packages/hand_detection/assets/models/gesture_embedder.tflite';
-    final (embedderOptions, embedderDelegate) =
-        InterpreterFactory.create(performanceConfig);
-    _embedderDelegate = embedderDelegate;
-    _embedderInterpreter =
-        await Interpreter.fromAsset(embedderPath, options: embedderOptions);
-    _embedderInterpreter!.allocateTensors();
-    _embedderIso = await InterpreterFactory.createIsolateIfNeeded(
-        _embedderInterpreter!, _embedderDelegate);
-
     const classifierPath =
         'packages/hand_detection/assets/models/canned_gesture_classifier.tflite';
-    final (classifierOptions, classifierDelegate) =
-        InterpreterFactory.create(performanceConfig);
-    _classifierDelegate = classifierDelegate;
-    _classifierInterpreter =
-        await Interpreter.fromAsset(classifierPath, options: classifierOptions);
-    _classifierInterpreter!.allocateTensors();
-    _classifierIso = await InterpreterFactory.createIsolateIfNeeded(
-        _classifierInterpreter!, _classifierDelegate);
 
-    _handInput = List.generate(
-      1,
-      (_) => List.generate(
-        21,
-        (_) => List<double>.filled(3, 0.0, growable: false),
-        growable: false,
-      ),
-      growable: false,
+    await _initializeWith(
+      performanceConfig: performanceConfig,
+      embedderLoader: (options) =>
+          Interpreter.fromAsset(embedderPath, options: options),
+      classifierLoader: (options) =>
+          Interpreter.fromAsset(classifierPath, options: options),
     );
-
-    _handednessInput = List.generate(
-      1,
-      (_) => List<double>.filled(1, 0.0, growable: false),
-      growable: false,
-    );
-
-    _worldHandInput = List.generate(
-      1,
-      (_) => List.generate(
-        21,
-        (_) => List<double>.filled(3, 0.0, growable: false),
-        growable: false,
-      ),
-      growable: false,
-    );
-
-    _embeddingOutput = List.generate(
-      1,
-      (_) => List<double>.filled(128, 0.0, growable: false),
-      growable: false,
-    );
-
-    _gestureOutput = List.generate(
-      1,
-      (_) => List<double>.filled(8, 0.0, growable: false),
-      growable: false,
-    );
-
-    _isInitialized = true;
   }
 
   /// Initializes the gesture recognizer from pre-loaded model bytes.
@@ -144,63 +91,65 @@ class GestureRecognizer {
   }) async {
     if (_isInitialized) await dispose();
 
-    final (embedderOptions, embedderDelegate) =
-        InterpreterFactory.create(performanceConfig);
-    _embedderDelegate = embedderDelegate;
-    _embedderInterpreter =
-        Interpreter.fromBuffer(embedderBytes, options: embedderOptions);
-    _embedderInterpreter!.allocateTensors();
-    _embedderIso = await InterpreterFactory.createIsolateIfNeeded(
-        _embedderInterpreter!, _embedderDelegate);
+    await _initializeWith(
+      performanceConfig: performanceConfig,
+      embedderLoader: (options) async =>
+          Interpreter.fromBuffer(embedderBytes, options: options),
+      classifierLoader: (options) async =>
+          Interpreter.fromBuffer(classifierBytes, options: options),
+    );
+  }
 
-    final (classifierOptions, classifierDelegate) =
-        InterpreterFactory.create(performanceConfig);
-    _classifierDelegate = classifierDelegate;
-    _classifierInterpreter =
-        Interpreter.fromBuffer(classifierBytes, options: classifierOptions);
-    _classifierInterpreter!.allocateTensors();
-    _classifierIso = await InterpreterFactory.createIsolateIfNeeded(
-        _classifierInterpreter!, _classifierDelegate);
-
-    _handInput = List.generate(
-      1,
-      (_) => List.generate(
-        21,
-        (_) => List<double>.filled(3, 0.0, growable: false),
-        growable: false,
-      ),
-      growable: false,
+  Future<void> _initializeWith({
+    required PerformanceConfig? performanceConfig,
+    required Future<Interpreter> Function(InterpreterOptions) embedderLoader,
+    required Future<Interpreter> Function(InterpreterOptions) classifierLoader,
+  }) async {
+    await _embedderPool.initialize(
+      (options, _) async {
+        final interp = await embedderLoader(options);
+        interp.allocateTensors();
+        return interp;
+      },
+      performanceConfig: performanceConfig,
     );
 
-    _handednessInput = List.generate(
-      1,
-      (_) => List<double>.filled(1, 0.0, growable: false),
-      growable: false,
+    await _classifierPool.initialize(
+      (options, _) async {
+        final interp = await classifierLoader(options);
+        interp.allocateTensors();
+        return interp;
+      },
+      performanceConfig: performanceConfig,
     );
 
-    _worldHandInput = List.generate(
-      1,
-      (_) => List.generate(
-        21,
-        (_) => List<double>.filled(3, 0.0, growable: false),
-        growable: false,
-      ),
-      growable: false,
-    );
-
-    _embeddingOutput = List.generate(
-      1,
-      (_) => List<double>.filled(128, 0.0, growable: false),
-      growable: false,
-    );
-
-    _gestureOutput = List.generate(
-      1,
-      (_) => List<double>.filled(8, 0.0, growable: false),
-      growable: false,
-    );
-
+    _allocateBuffers();
     _isInitialized = true;
+  }
+
+  static List<List<double>> _allocate2D(int rows, int cols) => List.generate(
+        rows,
+        (_) => List<double>.filled(cols, 0.0, growable: false),
+        growable: false,
+      );
+
+  static List<List<List<double>>> _allocate3D(int rows, int cols, int depth) =>
+      List.generate(
+        rows,
+        (_) => List.generate(
+          cols,
+          (_) => List<double>.filled(depth, 0.0, growable: false),
+          growable: false,
+        ),
+        growable: false,
+      );
+
+  void _allocateBuffers() {
+    _handInput = _allocate3D(1, 21, 3);
+    _handednessInput = _allocate2D(1, 1);
+    _worldHandInput = _allocate3D(1, 21, 3);
+    _embeddingOutput = _allocate2D(1, 128);
+    _gestureOutput = _allocate2D(1, 8);
   }
 
   /// Returns true if the recognizer has been initialized.
@@ -208,21 +157,8 @@ class GestureRecognizer {
 
   /// Releases all resources used by the recognizer.
   Future<void> dispose() async {
-    _embedderIso?.close();
-    _embedderIso = null;
-    _classifierIso?.close();
-    _classifierIso = null;
-
-    _embedderInterpreter?.close();
-    _embedderInterpreter = null;
-    _classifierInterpreter?.close();
-    _classifierInterpreter = null;
-
-    _embedderDelegate?.delete();
-    _embedderDelegate = null;
-    _classifierDelegate?.delete();
-    _classifierDelegate = null;
-
+    await _embedderPool.dispose();
+    await _classifierPool.dispose();
     _isInitialized = false;
   }
 
@@ -269,35 +205,34 @@ class GestureRecognizer {
       _worldHandInput[0][i][2] = worldLandmarks[i].z;
     }
 
-    if (_embedderIso != null) {
-      await _embedderIso!.runForMultipleInputs(
-        [_handInput, _handednessInput, _worldHandInput],
-        {0: _embeddingOutput},
-      );
-    } else {
-      _embedderInterpreter!.runForMultipleInputs(
-        [_handInput, _handednessInput, _worldHandInput],
-        {0: _embeddingOutput},
-      );
-    }
+    await _embedderPool.withInterpreter((interp, iso) async {
+      if (iso != null) {
+        await iso.runForMultipleInputs(
+          [_handInput, _handednessInput, _worldHandInput],
+          {0: _embeddingOutput},
+        );
+      } else {
+        interp.runForMultipleInputs(
+          [_handInput, _handednessInput, _worldHandInput],
+          {0: _embeddingOutput},
+        );
+      }
+    });
 
-    if (_classifierIso != null) {
-      await _classifierIso!.run(_embeddingOutput, _gestureOutput);
-    } else {
-      _classifierInterpreter!.run(_embeddingOutput, _gestureOutput);
-    }
+    await _classifierPool.withInterpreter((interp, iso) async {
+      if (iso != null) {
+        await iso.run(_embeddingOutput, _gestureOutput);
+      } else {
+        interp.run(_embeddingOutput, _gestureOutput);
+      }
+    });
 
     final probs = _gestureOutput[0];
-    int maxIdx = 0;
-    double maxProb = probs[0];
+    var maxIdx = 0;
     for (int i = 1; i < 8; i++) {
-      if (probs[i] > maxProb) {
-        maxProb = probs[i];
-        maxIdx = i;
-      }
+      if (probs[i] > probs[maxIdx]) maxIdx = i;
     }
-
-    final confidence = maxProb;
+    final confidence = probs[maxIdx];
 
     if (confidence < minConfidence) {
       return GestureResult(type: GestureType.unknown, confidence: confidence);
